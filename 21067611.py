@@ -91,7 +91,6 @@ class MLCourseGUI(QMainWindow):
                 data = datasets.load_digits()
             # Boston Housing Dataset has been removed, so California Housing Dataset will be used
             elif dataset_name == "Boston Housing Dataset":
-                # data = datasets.load_boston()
                 from sklearn.datasets import fetch_california_housing
                 data = fetch_california_housing()
             elif dataset_name == "MNIST Dataset":
@@ -108,7 +107,7 @@ class MLCourseGUI(QMainWindow):
                                               test_size=test_size, 
                                               random_state=42)
             
-            # Apply scaling if selected
+            # Apply scaling
             self.apply_scaling()
             
             self.status_bar.showMessage(f"Loaded {dataset_name}")
@@ -157,6 +156,7 @@ class MLCourseGUI(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             return combo.currentText()
         return None        
+    
     def visualize_missing_data_impact(self, missing_info):
         """Visualize the impact of missing data in the dataset"""
         try:
@@ -243,7 +243,7 @@ class MLCourseGUI(QMainWindow):
                         fill_method = "ffill" if preprocessing_method == "Forward Fill" else "bfill"
                         data = data.fillna(method=fill_method)
                 else:
-                    # If no preprocessing is selected, drop rows with NaN
+                    # If preprocessing is none, drop rows with NaN
                     data = data.dropna()
                     
                 # Ask user to select target column
@@ -260,7 +260,7 @@ class MLCourseGUI(QMainWindow):
                                                       test_size=test_size, 
                                                       random_state=42)
                     
-                    # Apply scaling if selected
+                    # Apply scaling
                     self.apply_scaling()
                     
                     # Visualize missing data impact
@@ -377,7 +377,7 @@ class MLCourseGUI(QMainWindow):
         regression_group = QGroupBox("Regression")
         regression_layout = QVBoxLayout()
         
-        # Linear Regression with loss function
+        # Linear Regression with loss func
         lr_group = self.create_algorithm_group(
             "Linear Regression",
             {"fit_intercept": "checkbox",
@@ -385,7 +385,7 @@ class MLCourseGUI(QMainWindow):
         )
         regression_layout.addWidget(lr_group)
         
-        # Logistic Regression with loss function
+        # Logistic Regression with loss func
         logistic_group = self.create_algorithm_group(
             "Logistic Regression",
             {"C": "double",
@@ -395,7 +395,7 @@ class MLCourseGUI(QMainWindow):
         )
         regression_layout.addWidget(logistic_group)
         
-        # Support Vector Regression (SVR) with loss function
+        # Support Vector Regression (SVR) with loss func
         svr_group = self.create_algorithm_group(
             "Support Vector Regression",
             {"kernel": ["linear", "rbf", "poly"],
@@ -412,7 +412,7 @@ class MLCourseGUI(QMainWindow):
         classification_group = QGroupBox("Classification")
         classification_layout = QVBoxLayout()
         
-        # Updated Naive Bayes
+        # Updated Naive Bayes with custom_priors
         nb_group = self.create_algorithm_group(
             "Naive Bayes",
             {"var_smoothing": "double",
@@ -545,7 +545,6 @@ class MLCourseGUI(QMainWindow):
                         if not np.isclose(sum(priors), 1.0):
                             raise ValueError("Prior probabilities must sum to 1")
                         
-                        # Ensure priors match number of classes
                         unique_classes = np.unique(self.y_train)
                         if len(priors) != len(unique_classes):
                             raise ValueError(f"Number of priors must match number of classes ({len(unique_classes)})")
@@ -717,8 +716,8 @@ class MLCourseGUI(QMainWindow):
         train_btn.clicked.connect(lambda: self.train_model(name, param_widgets))
         layout.addWidget(train_btn)
         
-        # Dynamic enabling/disabling of custom priors section
         def toggle_custom_priors():
+            """Dynamic enabling/disabling of custom priors section"""
             if prior_type_widget and custom_priors_widget:
                 prior_type = prior_type_widget.currentText()
                 
@@ -1051,8 +1050,7 @@ class MLCourseGUI(QMainWindow):
                 
         return model
 
-   
-        
+     
     def train_neural_network(self):
         """Train the neural network"""
         try:
