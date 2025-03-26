@@ -116,9 +116,79 @@ class MLCourseGUI(QMainWindow):
         except Exception as e:
             self.show_error(f"Error loading dataset: {str(e)}")
             
+    def select_target_column(self, columns):
+        """Dialog to select target column from dataset"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Target Column")
+        layout = QVBoxLayout(dialog)
         
+        # Label to explain target column selection
+        info_label = QLabel("Select the column you want to predict (target variable):")
+        layout.addWidget(info_label)
+        
+        # Store data as an attribute of the dialog
+        dialog.data = self.current_data    
+        
+        # Combo box for column selection
+        combo = QComboBox()
+        combo.addItems(columns)
+        layout.addWidget(combo)
+        
+        info_text = QTextEdit()
+        info_text.setReadOnly(True)
+        layout.addWidget(info_text)
+    
+        def update_column_info():
+            col = combo.currentText()
+            # Show column information
+            info = f"Column: {col}\n"
+            info += f"Unique Values: {len(dialog.data[col].unique())}\n"
+            info += f"Data Type: {dialog.data[col].dtype}\n"
+            info += f"Sample Values: {list(dialog.data[col].unique()[:5])}"
+            info_text.setText(info)
+    
+        combo.currentIndexChanged.connect(update_column_info)
+        update_column_info()  # Initial update
+        
+        btn = QPushButton("Select")
+        btn.clicked.connect(dialog.accept)
+        layout.addWidget(btn)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            return combo.currentText()
+        return None        
+    def visualize_missing_data_impact(self, missing_info):
+        """Visualize the impact of missing data in the dataset"""
+        try:
+            # Clear previous figure
+            self.figure.clear()
+            
+            # Create bar plot of missing values
+            ax = self.figure.add_subplot(111)
+            
+            # Filter out columns with zero missing values
+            missing_columns = missing_info[missing_info > 0]
+            
+            if len(missing_columns) > 0:
+                missing_columns.plot(kind='bar', ax=ax)
+                ax.set_title('Missing Values by Column')
+                ax.set_xlabel('Columns')
+                ax.set_ylabel('Number of Missing Values')
+                ax.tick_params(axis='x', rotation=45)
+            else:
+                ax.text(0.5, 0.5, 'No Missing Values', 
+                        horizontalalignment='center', 
+                        verticalalignment='center')
+                ax.set_title('Missing Data Analysis')
+            
+            self.figure.tight_layout()
+            self.canvas.draw()
+        
+        except Exception as e:
+            self.show_error(f"Error visualizing missing data: {str(e)}")
+                
     def load_custom_data(self):
-        """Enhanced custom data loading with preprocessing options"""
+        """Enhanced custom data loading with preprocessing options and categorical encoding"""
         try:
             file_name, _ = QFileDialog.getOpenFileName(
                 self,
@@ -128,10 +198,32 @@ class MLCourseGUI(QMainWindow):
             )
             
             if file_name:
-                # Load data
-                data = pd.read_csv(file_name)
+                # Load data and store it as an instance attribute
+                self.current_data = pd.read_csv(file_name)
+                data = self.current_data
+                # Preprocess categorical vars
+                def preprocess_categorical_data(df):
+                    # Identifying categorical columns
+                    categorical_columns = df.select_dtypes(include=['object']).columns
                 
-                # Handle missing values
+                    # One-hot encoding for categorical vars
+                    for col in categorical_columns:
+                        
+                        one_hot = pd.get_dummies(df[col], prefix=col)
+                    
+                        # Drop original categorical column and concat one-hot encoded columns
+                        df = pd.concat([df.drop(col, axis=1), one_hot], axis=1)
+                
+                    return df
+            
+                # Applying categorical preprocessing
+                data = preprocess_categorical_data(data)
+            
+                # Check and report missing values
+                missing_info = data.isnull().sum()
+                print("Missing Values:\n", missing_info)
+            
+                # Preprocessing method selection
                 preprocessing_method = self.preprocessing_combo.currentText()
                 
                 if preprocessing_method != "None":
@@ -140,13 +232,20 @@ class MLCourseGUI(QMainWindow):
                         imputer = impute.SimpleImputer(
                             strategy=self.preprocessing_methods[preprocessing_method]
                         )
-                        data_imputed = imputer.fit_transform(data)
-                        data = pd.DataFrame(data_imputed, columns=data.columns)
+                        # Separate numerical columns
+                        numeric_columns = data.select_dtypes(include=[np.number]).columns
+                    
+                        # Impute numerical columns
+                        if len(numeric_columns) > 0:
+                            data[numeric_columns] = imputer.fit_transform(data[numeric_columns])
                     elif preprocessing_method in ["Forward Fill", "Backward Fill"]:
                         # Time series style filling
                         fill_method = "ffill" if preprocessing_method == "Forward Fill" else "bfill"
                         data = data.fillna(method=fill_method)
-                
+                else:
+                    # If no preprocessing is selected, drop rows with NaN
+                    data = data.dropna()
+                    
                 # Ask user to select target column
                 target_col = self.select_target_column(data.columns)
                 
@@ -164,28 +263,14 @@ class MLCourseGUI(QMainWindow):
                     # Apply scaling if selected
                     self.apply_scaling()
                     
+                    # Visualize missing data impact
+                    self.visualize_missing_data_impact(missing_info)
+                    
                     self.status_bar.showMessage(f"Loaded custom dataset: {file_name}")
         
         except Exception as e:
             self.show_error(f"Error loading custom dataset: {str(e)}")
     
-    def select_target_column(self, columns):
-        """Dialog to select target column from dataset"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Select Target Column")
-        layout = QVBoxLayout(dialog)
-        
-        combo = QComboBox()
-        combo.addItems(columns)
-        layout.addWidget(combo)
-        
-        btn = QPushButton("Select")
-        btn.clicked.connect(dialog.accept)
-        layout.addWidget(btn)
-        
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            return combo.currentText()
-        return None
     
     def apply_scaling(self):
         """Apply selected scaling method to the data"""
@@ -331,7 +416,8 @@ class MLCourseGUI(QMainWindow):
         nb_group = self.create_algorithm_group(
             "Naive Bayes",
             {"var_smoothing": "double",
-             "prior_type": ["Uniform", "User-defined"]}
+             "prior_type": ["Uniform", "User-defined"],
+             "custom_priors": "text"}
         )
         classification_layout.addWidget(nb_group)
         
@@ -380,13 +466,23 @@ class MLCourseGUI(QMainWindow):
     def train_model(self, model_name, param_widgets):
         """Enhanced model training method with loss function support"""
         try:
-            # Collect parameters
+            # Collecting parameters
             model_params = {}
             loss_function = None
+            prior_type = None
+            custom_priors = None
             
             for param_name, widget in param_widgets.items():
                 if param_name == "loss_function":
                     loss_function = widget.currentText()
+                    continue
+                
+                if param_name == "prior_type":
+                    prior_type = widget.currentText()
+                    continue
+                
+                if param_name == "custom_priors":
+                    custom_priors = widget.text()
                     continue
                 
                 if isinstance(widget, QSpinBox):
@@ -433,11 +529,37 @@ class MLCourseGUI(QMainWindow):
                 y_pred = self.current_model.predict(self.X_test)
             
             elif model_name == "Naive Bayes":
-                # Add prior probability handling
-                if model_params.get('prior_type') == 'Uniform':
-                    model_params['priors'] = None
+                # Setting var_smoothing
+                var_smoothing = model_params.get('var_smoothing', 1e-9)
                 
-                self.current_model = GaussianNB(**model_params)
+                # Handle prior probabilities
+                if prior_type == "Uniform":
+                    priors = None
+                elif prior_type == "User-defined":
+                    # Parse custom priors from text input
+                    try:
+                        # Split by comma and convert to float
+                        priors = [float(p.strip()) for p in custom_priors.split(',')]
+                        
+                        # Validate priors
+                        if not np.isclose(sum(priors), 1.0):
+                            raise ValueError("Prior probabilities must sum to 1")
+                        
+                        # Ensure priors match number of classes
+                        unique_classes = np.unique(self.y_train)
+                        if len(priors) != len(unique_classes):
+                            raise ValueError(f"Number of priors must match number of classes ({len(unique_classes)})")
+                    
+                    except Exception as e:
+                        self.show_error(f"Invalid prior probabilities: {str(e)}")
+                        return
+                
+                # Create Naive Bayes model
+                self.current_model = GaussianNB(
+                    var_smoothing=var_smoothing,
+                    priors=priors if prior_type == "User-defined" else None
+                )
+                
                 self.current_model.fit(self.X_train, self.y_train)
                 y_pred = self.current_model.predict(self.X_test)
             
@@ -557,6 +679,9 @@ class MLCourseGUI(QMainWindow):
         
         # Create parameter inputs
         param_widgets = {}
+        prior_type_widget = None
+        custom_priors_widget = None
+        
         for param_name, param_type in params.items():
             param_layout = QHBoxLayout()
             param_layout.addWidget(QLabel(f"{param_name}:"))
@@ -573,7 +698,16 @@ class MLCourseGUI(QMainWindow):
             elif isinstance(param_type, list):
                 widget = QComboBox()
                 widget.addItems(param_type)
-            
+                
+                if param_name == "prior_type":
+                    prior_type_widget = widget
+            elif param_type == "text":
+                widget = QLineEdit()
+                widget.setPlaceholderText("Enter comma-separated probabilities")
+                widget.setMaximumWidth(150)
+                widget.setEnabled(False)
+                custom_priors_widget = widget
+
             param_layout.addWidget(widget)
             param_widgets[param_name] = widget
             layout.addLayout(param_layout)
@@ -583,9 +717,30 @@ class MLCourseGUI(QMainWindow):
         train_btn.clicked.connect(lambda: self.train_model(name, param_widgets))
         layout.addWidget(train_btn)
         
+        # Dynamic enabling/disabling of custom priors section
+        def toggle_custom_priors():
+            if prior_type_widget and custom_priors_widget:
+                prior_type = prior_type_widget.currentText()
+                
+                # Enable/disable based on prior type
+                custom_priors_widget.setEnabled(prior_type == "User-defined")
+                
+                # Clear the input if switching to Uniform
+                if prior_type == "Uniform":
+                    custom_priors_widget.clear()
+        
+        # Connect the toggle function to prior_type combo box
+        if prior_type_widget and custom_priors_widget:
+            prior_type_widget.currentIndexChanged.connect(toggle_custom_priors)
+        
+            # Initial state
+            prior_type_widget.currentIndexChanged.emit(prior_type_widget.currentIndex())
+
+        
         group.setLayout(layout)
         return group
-
+    
+        
     def show_error(self, message):
         """Show error message dialog"""
         QMessageBox.critical(self, "Error", message)
