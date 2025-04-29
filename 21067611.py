@@ -1,14 +1,24 @@
 import sys
+import os
 import numpy as np
 import pandas as pd
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                           QHBoxLayout, QTabWidget, QPushButton, QLabel, 
-                           QComboBox, QFileDialog, QSpinBox, QDoubleSpinBox,
-                           QGroupBox, QScrollArea, QTextEdit, QStatusBar,
-                           QProgressBar, QCheckBox, QGridLayout, QMessageBox,
-                           QDialog, QLineEdit)
-from PyQt6.QtCore import Qt
+import webbrowser
+import umap
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from mpl_toolkits.mplot3d import Axes3D
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.offline import plot
+import tensorflow as tf
+from tensorflow.keras import layers, models, optimizers, losses
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                             QHBoxLayout, QTabWidget, QPushButton, QLabel, 
+                             QComboBox, QFileDialog, QSpinBox, QDoubleSpinBox,
+                             QGroupBox, QScrollArea, QTextEdit, QStatusBar,
+                             QProgressBar, QCheckBox, QGridLayout, QMessageBox,
+                             QDialog, QLineEdit)
+from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from sklearn import datasets, preprocessing, model_selection, impute
@@ -20,11 +30,13 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.model_selection import KFold, cross_val_score, train_test_split
 from sklearn.metrics import (accuracy_score, mean_squared_error, 
-                            mean_absolute_error, confusion_matrix, 
-                            mean_absolute_percentage_error)
-import tensorflow as tf
-from tensorflow.keras import layers, models, optimizers, losses
+                              mean_absolute_error, confusion_matrix,
+                              mean_absolute_percentage_error, silhouette_score,
+                              silhouette_samples, f1_score)
 
 class MLCourseGUI(QMainWindow):
     def __init__(self):
@@ -464,9 +476,27 @@ class MLCourseGUI(QMainWindow):
         return widget
     
     def train_model(self, model_name, param_widgets):
-        """Enhanced model training method with loss function support"""
+        """Enhanced model training method supporting both classical ML and dimensionality reduction"""
         try:
-            # Collecting parameters
+            # Check if this is a dimensionality reduction algorithm
+            dim_reduction_models = ["PCA", "LDA", "K-Means", "t-SNE", "UMAP"]
+            
+            if model_name in dim_reduction_models:
+                # Apply dimensionality reduction based on the selected algorithm
+                if model_name == "PCA":
+                    self.train_pca(param_widgets)
+                elif model_name == "LDA":
+                    self.train_lda(param_widgets)
+                elif model_name == "K-Means":
+                    self.train_kmeans(param_widgets)
+                elif model_name == "t-SNE":
+                    self.train_tsne(param_widgets)
+                elif model_name == "UMAP":
+                    self.train_umap(param_widgets)
+                
+                return  # Exit early for dimensionality reduction methods
+            
+            # Training implementation for classical ML models
             model_params = {}
             loss_function = None
             prior_type = None
@@ -567,43 +597,176 @@ class MLCourseGUI(QMainWindow):
             self.update_metrics(y_pred)
             
             self.status_bar.showMessage(f"{model_name} Training Complete")
-        
+                
         except Exception as e:
             self.show_error(f"Error training {model_name}: {str(e)}")
             
     def create_dim_reduction_tab(self):
-        """Create the dimensionality reduction tab"""
+        """Create the dimensionality reduction and validation tab"""
         widget = QWidget()
         layout = QGridLayout(widget)
+        
+        # PCA section
+        pca_group = QGroupBox("Principal Component Analysis (PCA)")
+        pca_layout = QVBoxLayout()
+        
+        pca_params = self.create_algorithm_group(
+            "PCA",
+            {"n_components": "int",
+            "whiten": "checkbox",
+            "svd_solver": ["auto", "full", "arpack", "randomized"]}
+        )
+        pca_layout.addWidget(pca_params)
+        
+        # Explained variance visualization option
+        variance_btn = QPushButton("Show Explained Variance")
+        variance_btn.clicked.connect(lambda: self.show_explained_variance())
+        pca_layout.addWidget(variance_btn)
+        
+        # Eigenvalue computation button
+        eigenvalue_btn = QPushButton("Show Eigenvalue Computation")
+        eigenvalue_btn.clicked.connect(lambda: self.show_eigenvalue_computation())
+        pca_layout.addWidget(eigenvalue_btn)
+        
+        pca_group.setLayout(pca_layout)
+        layout.addWidget(pca_group, 0, 0)
+        
+        # LDA section
+        lda_group = QGroupBox("Linear Discriminant Analysis (LDA)")
+        lda_layout = QVBoxLayout()
+        
+        lda_params = self.create_algorithm_group(
+            "LDA",
+            {"n_components": "int",
+            "solver": ["svd", "lsqr", "eigen"]}
+        )
+        lda_layout.addWidget(lda_params)
+        
+        # Class separation metrics visualization
+        separation_btn = QPushButton("Show Class Separation Metrics")
+        separation_btn.clicked.connect(lambda: self.show_class_separation())
+        lda_layout.addWidget(separation_btn)
+        
+        lda_group.setLayout(lda_layout)
+        layout.addWidget(lda_group, 0, 1)
         
         # K-Means section
         kmeans_group = QGroupBox("K-Means Clustering")
         kmeans_layout = QVBoxLayout()
         
         kmeans_params = self.create_algorithm_group(
-            "K-Means Parameters",
+            "K-Means",
             {"n_clusters": "int",
-             "max_iter": "int",
-             "n_init": "int"}
+            "init": ["k-means++", "random"],
+            "max_iter": "int"}
         )
         kmeans_layout.addWidget(kmeans_params)
         
+        # Elbow method visualization
+        elbow_btn = QPushButton("Show Elbow Method")
+        elbow_btn.clicked.connect(lambda: self.show_elbow_method())
+        kmeans_layout.addWidget(elbow_btn)
+        
+        # Silhouette analysis button
+        silhouette_btn = QPushButton("Run Silhouette Analysis")
+        silhouette_btn.clicked.connect(lambda: self.run_silhouette_analysis())
+        kmeans_layout.addWidget(silhouette_btn)
+        
         kmeans_group.setLayout(kmeans_layout)
-        layout.addWidget(kmeans_group, 0, 0)
+        layout.addWidget(kmeans_group, 1, 0)
         
-        # PCA section
-        pca_group = QGroupBox("Principal Component Analysis")
-        pca_layout = QVBoxLayout()
+        # t-SNE section
+        tsne_group = QGroupBox("t-SNE")
+        tsne_layout = QVBoxLayout()
         
-        pca_params = self.create_algorithm_group(
-            "PCA Parameters",
-            {"n_components": "int",
-             "whiten": "checkbox"}
+        # Modified n_components limited to 2 or 3 only
+        tsne_params = self.create_algorithm_group(
+            "t-SNE",
+            {"n_components (projection)": ["2", "3"],
+            "perplexity": "double",
+            "learning_rate": "double"}
         )
-        pca_layout.addWidget(pca_params)
+        tsne_layout.addWidget(tsne_params)
+        tsne_group.setLayout(tsne_layout)
+        layout.addWidget(tsne_group, 1, 1)
         
-        pca_group.setLayout(pca_layout)
-        layout.addWidget(pca_group, 0, 1)
+        # UMAP section
+        umap_group = QGroupBox("UMAP")
+        umap_layout = QVBoxLayout()
+        
+        umap_params = self.create_algorithm_group(
+            "UMAP",
+            {"n_components": "int",
+            "n_neighbors": "int",
+            "min_dist": "double"}
+        )
+        umap_layout.addWidget(umap_params)
+        
+        umap_group.setLayout(umap_layout)
+        layout.addWidget(umap_group, 2, 0, 1, 2)  # Span 2 columns
+        
+        # Validation Methods
+        validation_group = QGroupBox("Cross-Validation Methods")
+        validation_layout = QVBoxLayout()
+        
+        # Dataset split options
+        split_layout = QHBoxLayout()
+        split_layout.addWidget(QLabel("Train/Val/Test Split:"))
+        self.split_combo = QComboBox()
+        self.split_combo.addItems(["70/15/15", "60/20/20", "80/10/10"])
+        split_layout.addWidget(self.split_combo)
+        self.apply_split_btn = QPushButton("Apply Split")
+        self.apply_split_btn.clicked.connect(lambda: self.apply_dataset_split())
+        split_layout.addWidget(self.apply_split_btn)
+        validation_layout.addLayout(split_layout)
+        
+        # K-fold options
+        kfold_layout = QHBoxLayout()
+        kfold_layout.addWidget(QLabel("K-Fold Value:"))
+        self.kfold_spin = QSpinBox()
+        self.kfold_spin.setRange(2, 20)
+        self.kfold_spin.setValue(5)
+        kfold_layout.addWidget(self.kfold_spin)
+        validation_layout.addLayout(kfold_layout)
+        
+        # Model selection for CV
+        model_layout = QHBoxLayout()
+        model_layout.addWidget(QLabel("Model for CV:"))
+        self.cv_model_combo = QComboBox()
+        self.cv_model_combo.addItems(["Current Model", "Random Forest", "SVM", "LogisticRegression"])
+        model_layout.addWidget(self.cv_model_combo)
+        validation_layout.addLayout(model_layout)
+        
+        # Metrics selection
+        metrics_layout = QHBoxLayout()
+        metrics_layout.addWidget(QLabel("Evaluation Metric:"))
+        self.metrics_combo = QComboBox()
+        self.metrics_combo.addItems(["Accuracy", "MSE", "RMSE", "R²", "F1-Score"])
+        metrics_layout.addWidget(self.metrics_combo)
+        validation_layout.addLayout(metrics_layout)
+        
+        # Run validation button
+        validation_btn = QPushButton("Run Cross-Validation")
+        validation_btn.clicked.connect(lambda: self.run_cross_validation())
+        validation_layout.addWidget(validation_btn)
+        
+        validation_group.setLayout(validation_layout)
+        layout.addWidget(validation_group, 3, 0, 1, 2)  # Span 2 columns
+        
+        plotly_group = QGroupBox("Interactive Visualization")
+        plotly_layout = QVBoxLayout()
+        
+        # Toggle between Matplotlib and Plotly
+        viz_layout = QHBoxLayout()
+        viz_layout.addWidget(QLabel("Visualization Engine:"))
+        self.viz_engine_combo = QComboBox()
+        self.viz_engine_combo.addItems(["Matplotlib", "Plotly"])
+        self.viz_engine_combo.currentTextChanged.connect(self.update_visualization_plotly)
+        viz_layout.addWidget(self.viz_engine_combo)
+        plotly_layout.addLayout(viz_layout)
+        
+        plotly_group.setLayout(plotly_layout)
+        layout.addWidget(plotly_group, 4, 0, 1, 2)  # Span 2 columns
         
         return widget
     
@@ -1174,6 +1337,700 @@ class MLCourseGUI(QMainWindow):
         
         self.figure.tight_layout()
         self.canvas.draw()
+    
+    def update_visualization_plotly(self):
+        """Update visualization based on selected engine (Matplotlib or Plotly)"""
+        if not hasattr(self, 'current_model'):
+            return
+            
+        engine = self.viz_engine_combo.currentText()
+        
+        if engine == "Plotly":
+            self.plot_with_plotly()
+        else:
+            # Re-plot with matplotlib based on current model type
+            if isinstance(self.current_model, PCA):
+                self.plot_dimensionality_reduction("PCA")
+            elif isinstance(self.current_model, LinearDiscriminantAnalysis):
+                self.plot_dimensionality_reduction("LDA")
+            elif isinstance(self.current_model, KMeans):
+                self.plot_clustering_results("K-Means")
+            elif isinstance(self.current_model, TSNE):
+                self.plot_dimensionality_reduction("t-SNE")
+            elif hasattr(self.current_model, 'embedding_') and 'UMAP' in str(type(self.current_model)):
+                self.plot_dimensionality_reduction("UMAP")
+    
+    def plot_with_plotly(self):
+        """Create interactive visualization with Plotly"""
+        try:
+            # Create a figure based on the type of data
+            if hasattr(self, 'X_transformed'):
+                data = self.X_transformed
+                
+                # Create a dataframe with the transformed data
+                df = pd.DataFrame(data, columns=[f'Component {i+1}' for i in range(data.shape[1])])
+                
+                # Add target variable if available for coloring
+                if hasattr(self, 'y_train') and self.y_train is not None:
+                    df['Target'] = self.y_train
+                    color_col = 'Target'
+                else:
+                    color_col = None
+                
+                # Create appropriate plot based on dimensions
+                if data.shape[1] == 1:
+                    # 1D data - create histogram
+                    fig = px.histogram(df, x='Component 1', color=color_col)
+                    title = "1D Projection"
+                elif data.shape[1] == 2:
+                    # 2D data - create scatter plot
+                    fig = px.scatter(df, x='Component 1', y='Component 2', color=color_col)
+                    title = "2D Projection"
+                else:
+                    # 3D data - create 3D scatter
+                    fig = px.scatter_3d(df, x='Component 1', y='Component 2', z='Component 3', 
+                                    color=color_col)
+                    title = "3D Projection"
+                    
+                # Handle specific model types
+                if isinstance(self.current_model, PCA):
+                    title = f"PCA {title}"
+                elif isinstance(self.current_model, LinearDiscriminantAnalysis):
+                    title = f"LDA {title}"
+                elif isinstance(self.current_model, TSNE):
+                    title = f"t-SNE {title}"
+                elif hasattr(self.current_model, 'embedding_'):
+                    title = f"UMAP {title}"
+                    
+            elif hasattr(self, 'cluster_labels'):
+                # For clustering results, apply PCA for visualization
+                if self.X_train.shape[1] > 2:
+                    pca = PCA(n_components=2)
+                    data = pca.fit_transform(self.X_train)
+                else:
+                    data = self.X_train
+                    
+                # Create a dataframe with the data
+                df = pd.DataFrame(data, columns=['Component 1', 'Component 2'])
+                df['Cluster'] = self.cluster_labels
+                
+                # Create scatter plot
+                fig = px.scatter(df, x='Component 1', y='Component 2', color='Cluster')
+                title = "K-Means Clustering"
+            else:
+                return
+                
+            # Update plot layout
+            fig.update_layout(
+                title=title,
+                template="plotly_white",
+                height=600
+            )
+            
+            # Save the plot to a temporary HTML file and display it
+            temp_file = "temp_plot.html"
+            plot(fig, filename=temp_file, auto_open=False)
+            
+            # Show the plot in a browser
+            webbrowser.open('file://' + os.path.realpath(temp_file))
+            
+            self.status_bar.showMessage(f"Interactive Plotly visualization created")
+            
+        except ImportError:
+            self.show_error("Plotly is not installed. Please install it using 'pip install plotly pandas'")
+        except Exception as e:
+            self.show_error(f"Error creating Plotly visualization: {str(e)}")
+    
+    def train_pca(self, param_widgets):
+        """Train PCA model with parameters"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        # Get parameters
+        n_components = param_widgets["n_components"].value()
+        whiten = param_widgets["whiten"].isChecked()
+        svd_solver = param_widgets["svd_solver"].currentText()
+        
+        # Create and fit PCA model
+        pca = PCA(n_components=n_components, whiten=whiten, svd_solver=svd_solver)
+        X_transformed = pca.fit_transform(self.X_train)
+        
+        # Store the model
+        self.current_model = pca
+        self.X_transformed = X_transformed
+        
+        # Update visualization
+        self.plot_dimensionality_reduction("PCA")
+        self.status_bar.showMessage(f"PCA training complete")
+
+    def train_lda(self, param_widgets):
+        """Train LDA model with parameters"""
+        if self.X_train is None or self.y_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        # Get parameters
+        n_components = param_widgets["n_components"].value()
+        solver = param_widgets["solver"].currentText()
+        
+        # Create and fit LDA model
+        lda = LinearDiscriminantAnalysis(n_components=n_components, solver=solver)
+        X_transformed = lda.fit_transform(self.X_train, self.y_train)
+        
+        # Store the model
+        self.current_model = lda
+        self.X_transformed = X_transformed
+        
+        # Update visualization
+        self.plot_dimensionality_reduction("LDA")
+        self.status_bar.showMessage(f"LDA training complete")
+
+    def train_kmeans(self, param_widgets):
+        """Train K-Means model with parameters"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        # Get parameters
+        n_clusters = param_widgets["n_clusters"].value()
+        init = param_widgets["init"].currentText()
+        max_iter = param_widgets["max_iter"].value()
+        
+        # Create and fit K-Means model
+        kmeans = KMeans(n_clusters=n_clusters, init=init, max_iter=max_iter, random_state=42)
+        cluster_labels = kmeans.fit_predict(self.X_train)
+        
+        # Store the model
+        self.current_model = kmeans
+        self.cluster_labels = cluster_labels
+        
+        # Update visualization
+        self.plot_clustering_results("K-Means")
+        self.status_bar.showMessage(f"K-Means clustering complete")
+
+    def train_tsne(self, param_widgets):
+        """Train t-SNE model with parameters"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        # Get parameters
+        n_components = int(param_widgets["n_components (projection)"].currentText())  # Changed from value() to currentText()
+        perplexity = param_widgets["perplexity"].value()
+        learning_rate = param_widgets["learning_rate"].value()
+        
+        # Create and fit t-SNE model
+        tsne = TSNE(n_components=n_components, perplexity=perplexity, 
+                    learning_rate=learning_rate, random_state=42)
+        X_transformed = tsne.fit_transform(self.X_train)
+        
+        # Store the model
+        self.current_model = tsne
+        self.X_transformed = X_transformed
+        
+        # Update visualization
+        self.plot_dimensionality_reduction("t-SNE")
+        self.status_bar.showMessage(f"t-SNE training complete")
+
+    def train_umap(self, param_widgets):
+        """Train UMAP model with parameters"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        try:
+            # Get parameters
+            n_components = param_widgets["n_components"].value()
+            n_neighbors = param_widgets["n_neighbors"].value()
+            min_dist = param_widgets["min_dist"].value()
+            
+            # Create and fit UMAP model
+            reducer = umap.UMAP(n_components=n_components, n_neighbors=n_neighbors, 
+                            min_dist=min_dist, random_state=42)
+            X_transformed = reducer.fit_transform(self.X_train)
+            
+            # Store the model
+            self.current_model = reducer
+            self.X_transformed = X_transformed
+            
+            # Update visualization
+            self.plot_dimensionality_reduction("UMAP")
+            self.status_bar.showMessage(f"UMAP training complete")
+        except ImportError:
+            self.show_error("UMAP is not installed. Please install it using 'pip install umap-learn'")
+
+    def plot_dimensionality_reduction(self, method_name):
+        """Plot dimensionality reduction results"""
+        self.figure.clear()
+        
+        # Check dimensionality of transformed data
+        if self.X_transformed.shape[1] < 2:
+            # 1D projection
+            ax = self.figure.add_subplot(111)
+            if self.y_train is not None:
+                # For classification, show different classes
+                for cls in np.unique(self.y_train):
+                    mask = self.y_train == cls
+                    ax.hist(self.X_transformed[mask, 0], alpha=0.5, label=f'Class {cls}')
+                ax.legend()
+            else:
+                # For unsupervised methods
+                ax.hist(self.X_transformed[:, 0])
+            ax.set_title(f"{method_name} 1D Projection")
+            ax.set_xlabel("Component 1")
+        
+        elif self.X_transformed.shape[1] == 2:
+            # 2D projection
+            ax = self.figure.add_subplot(111)
+            if hasattr(self, 'y_train') and self.y_train is not None:
+                scatter = ax.scatter(self.X_transformed[:, 0], self.X_transformed[:, 1],
+                                c=self.y_train, cmap='viridis', alpha=0.8)
+                legend = ax.legend(*scatter.legend_elements(), title="Classes")
+                ax.add_artist(legend)
+            else:
+                ax.scatter(self.X_transformed[:, 0], self.X_transformed[:, 1], alpha=0.8)
+            ax.set_title(f"{method_name} 2D Projection")
+            ax.set_xlabel("Component 1")
+            ax.set_ylabel("Component 2")
+        
+        else:
+            # 3D projection
+            ax = self.figure.add_subplot(111, projection='3d')
+            if hasattr(self, 'y_train') and self.y_train is not None:
+                scatter = ax.scatter(self.X_transformed[:, 0], self.X_transformed[:, 1], 
+                                self.X_transformed[:, 2], c=self.y_train, cmap='viridis', alpha=0.8)
+                legend = ax.legend(*scatter.legend_elements(), title="Classes")
+                ax.add_artist(legend)
+            else:
+                ax.scatter(self.X_transformed[:, 0], self.X_transformed[:, 1], 
+                        self.X_transformed[:, 2], alpha=0.8)
+            ax.set_title(f"{method_name} 3D Projection")
+            ax.set_xlabel("Component 1")
+            ax.set_ylabel("Component 2")
+            ax.set_zlabel("Component 3")
+        
+        self.canvas.draw()
+        
+        # Update metrics text with additional information
+        metrics_text = f"{method_name} Results:\n\n"
+        
+        if method_name == "PCA" and hasattr(self, 'current_model'):
+            explained_var = self.current_model.explained_variance_ratio_
+            metrics_text += "Explained Variance Ratio:\n"
+            for i, var in enumerate(explained_var):
+                metrics_text += f"Component {i+1}: {var:.4f}\n"
+            metrics_text += f"\nTotal Variance Explained: {sum(explained_var):.4f}"
+        
+        elif method_name == "LDA" and hasattr(self, 'current_model'):
+            metrics_text += "Class Separation Analysis:\n"
+            # Show discriminant coefficients if available
+            if hasattr(self.current_model, 'coef_'):
+                metrics_text += "Discriminant Coefficients:\n"
+                for i, coef in enumerate(self.current_model.coef_):
+                    metrics_text += f"Class {i+1}: {np.array2string(coef, precision=4)}\n"
+        
+        self.metrics_text.setText(metrics_text)
+
+    def plot_clustering_results(self, method_name):
+        """Plot clustering results"""
+        self.figure.clear()
+        
+        if not hasattr(self, 'cluster_labels'):
+            return
+        
+        # Apply PCA if data dimensionality is high
+        if self.X_train.shape[1] > 2:
+            pca = PCA(n_components=2)
+            X_2d = pca.fit_transform(self.X_train)
+        else:
+            X_2d = self.X_train
+        
+        # Plot clustering results
+        ax = self.figure.add_subplot(111)
+        scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1], c=self.cluster_labels, cmap='viridis')
+        ax.set_title(f"{method_name} Clustering Results")
+        ax.set_xlabel("Component 1")
+        ax.set_ylabel("Component 2")
+        legend = ax.legend(*scatter.legend_elements(), title="Clusters")
+        ax.add_artist(legend)
+        
+        self.canvas.draw()
+        
+        # Update metrics text
+        metrics_text = f"{method_name} Clustering Results:\n\n"
+        
+        if method_name == "K-Means" and hasattr(self, 'current_model'):
+            metrics_text += f"Number of Clusters: {self.current_model.n_clusters}\n"
+            metrics_text += f"Inertia (Sum of Squared Distances): {self.current_model.inertia_:.4f}\n"
+            
+            # Calculate silhouette score
+            try:
+                silhouette = silhouette_score(self.X_train, self.cluster_labels)
+                metrics_text += f"Silhouette Score: {silhouette:.4f}"
+            except:
+                pass
+        
+        self.metrics_text.setText(metrics_text)
+
+    def show_explained_variance(self):
+        """Show PCA explained variance plot"""
+        if not hasattr(self, 'current_model') or not isinstance(self.current_model, PCA):
+            self.show_error("Please train a PCA model first")
+            return
+        
+        # Extract explained variance information
+        explained_var = self.current_model.explained_variance_ratio_
+        cum_explained_var = np.cumsum(explained_var)
+        
+        # Plot explained variance
+        self.figure.clear()
+        ax1 = self.figure.add_subplot(111)
+        
+        components = range(1, len(explained_var) + 1)
+        ax1.bar(components, explained_var, alpha=0.5, label='Individual')
+        ax1.set_ylabel('Explained Variance Ratio')
+        ax1.set_xlabel('Principal Components')
+        ax1.set_title('Explained Variance by Components')
+        
+        ax2 = ax1.twinx()
+        ax2.step(components, cum_explained_var, where='mid', color='r', label='Cumulative')
+        ax2.set_ylabel('Cumulative Explained Variance')
+        
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+        
+        self.canvas.draw()
+
+    def show_class_separation(self):
+        """Show LDA class separation metrics"""
+        if not hasattr(self, 'current_model') or not isinstance(self.current_model, LinearDiscriminantAnalysis):
+            self.show_error("Please train an LDA model first")
+            return
+        
+        try:
+            # Make predictions
+            y_pred = self.current_model.predict(self.X_test)
+            
+            # Calculate confusion matrix
+            cm = confusion_matrix(self.y_test, y_pred)
+            
+            # Plot confusion matrix
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            cax = ax.matshow(cm, cmap='Blues')
+            self.figure.colorbar(cax)
+            
+            # Set labels
+            ax.set_xlabel('Predicted')
+            ax.set_ylabel('Actual')
+            ax.set_title('Confusion Matrix')
+            
+            # Add text
+            classes = np.unique(self.y_test)
+            for i in range(len(classes)):
+                for j in range(len(classes)):
+                    ax.text(j, i, str(cm[i, j]), ha='center', va='center')
+            
+            self.canvas.draw()
+            
+            # Update metrics text
+            accuracy = accuracy_score(self.y_test, y_pred)
+            try:
+                f1 = f1_score(self.y_test, y_pred, average='weighted')
+                metrics_text = f"LDA Class Separation Metrics:\n\n"
+                metrics_text += f"Accuracy: {accuracy:.4f}\n"
+                metrics_text += f"F1 Score: {f1:.4f}"
+                self.metrics_text.setText(metrics_text)
+            except:
+                metrics_text = f"LDA Class Separation Metrics:\n\n"
+                metrics_text += f"Accuracy: {accuracy:.4f}"
+                self.metrics_text.setText(metrics_text)
+            
+        except Exception as e:
+            self.show_error(f"Error calculating metrics: {str(e)}")
+
+    def show_elbow_method(self):
+        """Show K-Means elbow method for determining optimal k"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        try:
+            # Calculate inertia for different k values
+            inertias = []
+            k_range = range(1, 11)
+            
+            # Show progress
+            self.progress_bar.setValue(0)
+            self.status_bar.showMessage("Running elbow method analysis...")
+            
+            for i, k in enumerate(k_range):
+                kmeans = KMeans(n_clusters=k, random_state=42)
+                kmeans.fit(self.X_train)
+                inertias.append(kmeans.inertia_)
+                self.progress_bar.setValue(int((i+1)/len(k_range) * 100))
+            
+            # Plot elbow curve
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            ax.plot(k_range, inertias, 'bo-')
+            ax.set_xlabel('Number of Clusters (k)')
+            ax.set_ylabel('Inertia (Sum of Squared Distances)')
+            ax.set_title('Elbow Method for Optimal k')
+            ax.grid(True)
+            
+            self.canvas.draw()
+            self.status_bar.showMessage("Elbow method analysis complete")
+            
+        except Exception as e:
+            self.show_error(f"Error in elbow method: {str(e)}")
+
+    def run_silhouette_analysis(self):
+        """Run silhouette analysis for clustering quality"""
+        if self.X_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        try:
+            # Apply PCA
+            if self.X_train.shape[1] > 2:
+                pca = PCA(n_components=2)
+                X_pca = pca.fit_transform(self.X_train)
+            else:
+                X_pca = self.X_train
+            
+            # Initialize plot
+            self.figure.clear()
+            
+            # Test a range of cluster numbers
+            n_clusters_range = range(2, 6)
+            n_clusters = len(n_clusters_range)
+            
+            # Create a subplot grid
+            rows = int(np.ceil(n_clusters / 2))
+            cols = 2 if n_clusters > 1 else 1
+            
+            # Calculate silhouette scores
+            for i, n_clusters in enumerate(n_clusters_range):
+                # Create subplot
+                ax = self.figure.add_subplot(rows, cols, i+1)
+                
+                # Run K-means
+                kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+                cluster_labels = kmeans.fit_predict(self.X_train)
+                
+                # Calculate silhouette scores
+                silhouette_avg = silhouette_score(self.X_train, cluster_labels)
+                
+                # Plot silhouette
+                ax.scatter(X_pca[:, 0], X_pca[:, 1], c=cluster_labels, cmap='viridis', alpha=0.7)
+                ax.set_title(f'Clusters: {n_clusters}, Silhouette: {silhouette_avg:.3f}')
+                ax.set_xlabel('Component 1')
+                ax.set_ylabel('Component 2')
+            
+            self.figure.tight_layout()
+            self.canvas.draw()
+            
+            self.status_bar.showMessage("Silhouette analysis complete")
+            
+        except Exception as e:
+            self.show_error(f"Error in silhouette analysis: {str(e)}")
+
+    def apply_dataset_split(self):
+        """Apply selected train/val/test split to the dataset"""
+        if self.X_train is None or self.y_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        split_option = self.split_combo.currentText()
+        
+        # Extract split values
+        train_size = float(split_option.split('/')[0]) / 100
+        val_size = float(split_option.split('/')[1]) / 100
+        
+        try:
+            # Combine existing train and test data back into full dataset
+            X_combined = np.vstack((self.X_train, self.X_test)) if self.X_test is not None else self.X_train
+            y_combined = np.concatenate((self.y_train, self.y_test)) if self.y_test is not None else self.y_train
+            
+            # Calculate test_size based on what's left after train and validation
+            test_size = 1.0 - train_size
+            
+            # First split to get train and temp
+            X_train, X_temp, y_train, y_temp = train_test_split(
+                X_combined, y_combined, train_size=train_size, random_state=42)
+            
+            # Then split temp into val and test
+            val_relative_size = val_size / (val_size + (1 - train_size - val_size))
+            X_val, X_test, y_val, y_test = train_test_split(
+                X_temp, y_temp, train_size=val_relative_size, random_state=42)
+            
+            # Update the class attributes
+            self.X_train = X_train
+            self.y_train = y_train
+            self.X_val = X_val
+            self.y_val = y_val
+            self.X_test = X_test
+            self.y_test = y_test
+            
+            self.status_bar.showMessage(f"Applied {split_option} split to dataset")
+            
+        except Exception as e:
+            self.show_error(f"Error applying dataset split: {str(e)}")
+    
+    def run_cross_validation(self):
+        """Run k-fold cross-validation with improved model selection"""
+        if self.X_train is None or self.y_train is None:
+            self.show_error("Please load a dataset first")
+            return
+        
+        try:
+            # Get parameters
+            k_folds = self.kfold_spin.value()
+            metric = self.metrics_combo.currentText().lower()
+            model_choice = self.cv_model_combo.currentText()
+            
+            # Convert metric to scikit-learn scoring parameter
+            if metric == "accuracy":
+                scoring = "accuracy"
+            elif metric == "mse":
+                scoring = "neg_mean_squared_error"
+            elif metric == "rmse":
+                scoring = "neg_root_mean_squared_error"
+            elif metric == "r²":
+                scoring = "r2"
+            elif metric == "f1-score":
+                scoring = "f1_weighted"
+            else:
+                scoring = "accuracy"
+            
+            # Select model for cross-validation
+            if model_choice == "Current Model" and hasattr(self, 'current_model'):
+                model = self.current_model
+            elif model_choice == "Random Forest":
+                model = RandomForestClassifier(random_state=42)
+            elif model_choice == "SVM":
+                model = SVC(random_state=42)
+            elif model_choice == "LogisticRegression":
+                model = LogisticRegression(random_state=42)
+            else:
+                # Default to Random Forest if no valid selection
+                model = RandomForestClassifier(random_state=42)
+            
+            # Skip dimensionality reduction models that don't have predict method
+            if hasattr(model, 'predict') == False:
+                self.show_error("Selected model does not support prediction. Please select a different model.")
+                return
+            
+            # Run k-fold cross-validation
+            kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+            
+            # Show progress
+            self.progress_bar.setValue(0)
+            self.status_bar.showMessage(f"Running {k_folds}-fold cross-validation...")
+            
+            scores = cross_val_score(model, self.X_train, self.y_train, 
+                                cv=kf, scoring=scoring)
+            
+            # Reset progress bar
+            self.progress_bar.setValue(100)
+            
+            # Plot results
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            fold_indices = np.arange(1, k_folds + 1)
+            
+            # Handle negative scores for MSE/RMSE
+            if "neg_" in scoring:
+                scores = -scores
+            
+            # Plot individual fold scores
+            ax.bar(fold_indices, scores)
+            ax.axhline(y=np.mean(scores), color='r', linestyle='-', label=f'Mean: {np.mean(scores):.4f}')
+            ax.axhline(y=np.mean(scores) + np.std(scores), color='g', linestyle='--', 
+                    label=f'Std: {np.std(scores):.4f}')
+            ax.axhline(y=np.mean(scores) - np.std(scores), color='g', linestyle='--')
+            
+            ax.set_xlabel('Fold')
+            ax.set_ylabel(f'{metric.upper()} Score')
+            ax.set_title(f'{k_folds}-Fold Cross-Validation Results')
+            ax.set_xticks(fold_indices)
+            ax.legend()
+            
+            self.canvas.draw()
+            
+            # Update metrics text
+            metrics_text = f"Cross-Validation Results ({k_folds}-Fold):\n\n"
+            metrics_text += f"Model: {model_choice}\n"
+            metrics_text += f"Metric: {metric.upper()}\n"
+            metrics_text += f"Mean Score: {np.mean(scores):.4f}\n"
+            metrics_text += f"Std Dev: {np.std(scores):.4f}\n\n"
+            metrics_text += "Fold Scores:\n"
+            
+            for i, score in enumerate(scores):
+                metrics_text += f"Fold {i+1}: {score:.4f}\n"
+            
+            self.metrics_text.setText(metrics_text)
+            self.status_bar.showMessage(f"{k_folds}-fold cross-validation complete")
+            
+        except Exception as e:
+            self.show_error(f"Error in cross-validation: {str(e)}")
+
+    def show_eigenvalue_computation(self):
+        """Show eigenvalue computation for PCA"""
+        if not hasattr(self, 'current_model') or not isinstance(self.current_model, PCA):
+            self.show_error("Please train a PCA model first")
+            return
+        
+        try:
+            # Get the eigenvalues from the model
+            eigenvalues = self.current_model.explained_variance_
+            
+            # Create a heatmap of covariance matrix
+            cov_matrix = np.cov(self.X_train, rowvar=False)
+            
+            # Plot eigenvalues and covariance matrix
+            self.figure.clear()
+            
+            # Create 2x1 subplot grid
+            gs = self.figure.add_gridspec(2, 1, height_ratios=[1, 1.5])
+            
+            # Plot eigenvalues
+            ax1 = self.figure.add_subplot(gs[0])
+            components = range(1, len(eigenvalues) + 1)
+            ax1.bar(components, eigenvalues)
+            ax1.set_title('Eigenvalues (Explained Variance)')
+            ax1.set_xlabel('Principal Components')
+            ax1.set_ylabel('Eigenvalue')
+            
+            # Plot covariance matrix heatmap
+            ax2 = self.figure.add_subplot(gs[1])
+            im = ax2.imshow(cov_matrix, cmap='viridis')
+            ax2.set_title('Covariance Matrix')
+            
+            # Add colorbar
+            self.figure.colorbar(im, ax=ax2)
+            
+            # Adjust layout
+            self.figure.tight_layout()
+            self.canvas.draw()
+            
+            # Update metrics text
+            metrics_text = "Eigenvalue Analysis:\n\n"
+            metrics_text += "Top 5 Eigenvalues:\n"
+            
+            for i, val in enumerate(eigenvalues[:5] if len(eigenvalues) >= 5 else eigenvalues):
+                metrics_text += f"Component {i+1}: {val:.4f}\n"
+            
+            metrics_text += "\nCovariance Matrix Size: {0}x{0}".format(cov_matrix.shape[0])
+            
+            self.metrics_text.setText(metrics_text)
+            self.status_bar.showMessage("Eigenvalue computation complete")
+            
+        except Exception as e:
+            self.show_error(f"Error computing eigenvalues: {str(e)}")
         
     def show_error(self, message):
         """Show error message dialog"""
